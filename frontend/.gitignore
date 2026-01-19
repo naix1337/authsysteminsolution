@@ -1,0 +1,19 @@
+@module next
+build
+dist
+.next
+.output
+.vercel
+.turbo
+
+# dependencies
+node_modules
+
+# environment
+.env
+.env.*
+!.env.example
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts

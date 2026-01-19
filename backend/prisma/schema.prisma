@@ -1,0 +1,501 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// CORE AUTHENTICATION & USER MANAGEMENT
+// ============================================
+
+model User {
+  id                String              @id @default(uuid())
+  username          String              @unique
+  email             String              @unique
+  password          String
+  isActive          Boolean             @default(true)
+  isBanned          Boolean             @default(false)
+  banReason         String?
+  bannedAt          DateTime?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  
+  // Relations
+  sessions          Session[]
+  refreshTokens     RefreshToken[]
+  fingerprints      DeviceFingerprint[]
+  licenses          License[]
+  auditLogs         AuditLog[]
+  securityEvents    SecurityEvent[]
+  profile           UserProfile?
+  threads           Thread[]
+  posts             Post[]
+  likes             Like[]
+  sentMessages      DirectMessage[]     @relation("SentMessages")
+  receivedMessages  DirectMessage[]     @relation("ReceivedMessages")
+  attachments       Attachment[]
+  roles             UserRole[]
+  banRecords        BanRecord[]
+  
+  @@index([email])
+  @@index([username])
+  @@map("users")
+}
+
+model Session {
+  id                String    @id @default(uuid())
+  userId            String
+  token             String    @unique
+  deviceFingerprint String
+  ipAddress         String
+  userAgent         String?
+  location          String?
+  isActive          Boolean   @default(true)
+  createdAt         DateTime  @default(now())
+  expiresAt         DateTime
+  lastSeenAt        DateTime  @default(now())
+  
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId])
+  @@index([token])
+  @@index([deviceFingerprint])
+  @@map("sessions")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  isRevoked Boolean  @default(false)
+  
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId])
+  @@index([token])
+  @@map("refresh_tokens")
+}
+
+model DeviceFingerprint {
+  id            String   @id @default(uuid())
+  userId        String
+  hwid          String
+  cpuId         String?
+  diskSerial    String?
+  macHash       String?
+  biosHash      String?
+  osHash        String?
+  combined      String   @unique
+  trustScore    Int      @default(100)
+  ipAddress     String
+  location      String?
+  createdAt     DateTime @default(now())
+  lastSeenAt    DateTime @default(now())
+  
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId])
+  @@index([combined])
+  @@index([hwid])
+  @@map("device_fingerprints")
+}
+
+// ============================================
+// LICENSE MANAGEMENT
+// ============================================
+
+enum LicenseType {
+  TRIAL
+  SUBSCRIPTION
+  LIFETIME
+  ONE_TIME
+}
+
+enum LicenseStatus {
+  ACTIVE
+  EXPIRED
+  SUSPENDED
+  REVOKED
+}
+
+model License {
+  id            String            @id @default(uuid())
+  key           String            @unique
+  userId        String?
+  type          LicenseType
+  status        LicenseStatus     @default(ACTIVE)
+  maxDevices    Int               @default(1)
+  createdAt     DateTime          @default(now())
+  activatedAt   DateTime?
+  expiresAt     DateTime?
+  suspendedAt   DateTime?
+  revokedAt     DateTime?
+  notes         String?
+  
+  user          User?             @relation(fields: [userId], references: [id])
+  activations   LicenseActivation[]
+  
+  @@index([key])
+  @@index([userId])
+  @@index([status])
+  @@map("licenses")
+}
+
+model LicenseActivation {
+  id                String   @id @default(uuid())
+  licenseId         String
+  deviceFingerprint String
+  ipAddress         String
+  location          String?
+  activatedAt       DateTime @default(now())
+  lastSeenAt        DateTime @default(now())
+  isActive          Boolean  @default(true)
+  
+  license           License  @relation(fields: [licenseId], references: [id], onDelete: Cascade)
+  
+  @@index([licenseId])
+  @@index([deviceFingerprint])
+  @@map("license_activations")
+}
+
+// ============================================
+// SECURITY & AUDIT
+// ============================================
+
+model IPReputation {
+  id          String   @id @default(uuid())
+  ipAddress   String   @unique
+  score       Int      @default(50)
+  isVpn       Boolean  @default(false)
+  isProxy     Boolean  @default(false)
+  isTor       Boolean  @default(false)
+  country     String?
+  isBlocked   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@index([ipAddress])
+  @@map("ip_reputations")
+}
+
+enum AuditAction {
+  USER_REGISTER
+  USER_LOGIN
+  USER_LOGOUT
+  LICENSE_ACTIVATE
+  LICENSE_DEACTIVATE
+  HWID_RESET
+  PASSWORD_CHANGE
+  PROFILE_UPDATE
+  SESSION_CREATE
+  SESSION_DESTROY
+  ADMIN_ACTION
+}
+
+model AuditLog {
+  id          String      @id @default(uuid())
+  userId      String?
+  action      AuditAction
+  resource    String?
+  details     String?
+  ipAddress   String
+  userAgent   String?
+  createdAt   DateTime    @default(now())
+  
+  user        User?       @relation(fields: [userId], references: [id])
+  
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+enum SecurityEventType {
+  SUSPICIOUS_LOGIN
+  MULTIPLE_FAILED_LOGINS
+  DEVICE_CHANGE
+  IP_CHANGE
+  GEO_ANOMALY
+  DEBUGGER_DETECTED
+  VM_DETECTED
+  INTEGRITY_FAILURE
+  REPLAY_ATTACK
+  RATE_LIMIT_EXCEEDED
+}
+
+model SecurityEvent {
+  id          String             @id @default(uuid())
+  userId      String?
+  type        SecurityEventType
+  severity    Int                @default(5)
+  description String
+  ipAddress   String
+  metadata    String?
+  resolved    Boolean            @default(false)
+  createdAt   DateTime           @default(now())
+  
+  user        User?              @relation(fields: [userId], references: [id])
+  
+  @@index([userId])
+  @@index([type])
+  @@index([createdAt])
+  @@map("security_events")
+}
+
+// ============================================
+// FORUM
+// ============================================
+
+model Category {
+  id                String              @id @default(uuid())
+  name              String              @unique
+  slug              String              @unique
+  description       String?
+  icon              String?
+  order             Int                 @default(0)
+  isActive          Boolean             @default(true)
+  requiresLicense   Boolean             @default(false)
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  
+  threads           Thread[]
+  permissions       CategoryPermission[]
+  
+  @@map("categories")
+}
+
+model Thread {
+  id          String    @id @default(uuid())
+  title       String
+  slug        String    @unique
+  categoryId  String
+  authorId    String
+  isPinned    Boolean   @default(false)
+  isLocked    Boolean   @default(false)
+  isPrivate   Boolean   @default(false)
+  views       Int       @default(0)
+  deletedAt   DateTime?
+  deletedBy   String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  
+  category    Category  @relation(fields: [categoryId], references: [id])
+  author      User      @relation(fields: [authorId], references: [id])
+  posts       Post[]
+  permissions ThreadPermission[]
+  
+  @@index([categoryId])
+  @@index([authorId])
+  @@index([slug])
+  @@index([deletedAt])
+  @@map("threads")
+}
+
+model Post {
+  id          String    @id @default(uuid())
+  threadId    String
+  authorId    String
+  content     String
+  isEdited    Boolean   @default(false)
+  editedAt    DateTime?
+  deletedAt   DateTime?
+  deletedBy   String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  
+  thread      Thread    @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  author      User      @relation(fields: [authorId], references: [id])
+  likes       Like[]
+  
+  @@index([threadId])
+  @@index([authorId])
+  @@index([deletedAt])
+  @@map("posts")
+}
+
+model Like {
+  id        String   @id @default(uuid())
+  postId    String
+  userId    String
+  createdAt DateTime @default(now())
+  
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([postId, userId])
+  @@index([postId])
+  @@index([userId])
+  @@map("likes")
+}
+
+model UserProfile {
+  id            String   @id @default(uuid())
+  userId        String   @unique
+  displayName   String?
+  avatar        String?
+  bio           String?
+  signature     String?
+  website       String?
+  location      String?
+  reputation    Int      @default(0)
+  postCount     Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@map("user_profiles")
+}
+
+model DirectMessage {
+  id          String   @id @default(uuid())
+  senderId    String
+  receiverId  String
+  subject     String?
+  content     String
+  isRead      Boolean  @default(false)
+  readAt      DateTime?
+  createdAt   DateTime @default(now())
+  
+  sender      User     @relation("SentMessages", fields: [senderId], references: [id])
+  receiver    User     @relation("ReceivedMessages", fields: [receiverId], references: [id])
+  
+  @@index([senderId])
+  @@index([receiverId])
+  @@map("direct_messages")
+}
+
+model Attachment {
+  id          String   @id @default(uuid())
+  userId      String
+  filename    String
+  originalName String
+  mimeType    String
+  size        Int
+  path        String
+  createdAt   DateTime @default(now())
+  
+  user        User     @relation(fields: [userId], references: [id])
+  
+  @@index([userId])
+  @@map("attachments")
+}
+
+// ============================================
+// PERMISSIONS & ROLES (RBAC/ABAC)
+// ============================================
+
+enum RoleType {
+  ADMIN
+  MODERATOR
+  PREMIUM_USER
+  REGULAR_USER
+  GUEST
+}
+
+model Role {
+  id          String   @id @default(uuid())
+  name        RoleType @unique
+  description String?
+  permissions String[] // JSON array of permissions
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  users       UserRole[]
+  
+  @@map("roles")
+}
+
+model UserRole {
+  id        String   @id @default(uuid())
+  userId    String
+  roleId    String
+  createdAt DateTime @default(now())
+  
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, roleId])
+  @@index([userId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+model CategoryPermission {
+  id          String   @id @default(uuid())
+  categoryId  String
+  roleType    RoleType
+  canView     Boolean  @default(true)
+  canPost     Boolean  @default(false)
+  canModerate Boolean  @default(false)
+  
+  category    Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  
+  @@unique([categoryId, roleType])
+  @@map("category_permissions")
+}
+
+model ThreadPermission {
+  id        String   @id @default(uuid())
+  threadId  String
+  userId    String?
+  roleType  RoleType?
+  canView   Boolean  @default(true)
+  canReply  Boolean  @default(false)
+  canEdit   Boolean  @default(false)
+  
+  thread    Thread   @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  
+  @@index([threadId])
+  @@map("thread_permissions")
+}
+
+// ============================================
+// ADMIN & MODERATION
+// ============================================
+
+enum AdminActionType {
+  BAN_USER
+  UNBAN_USER
+  DELETE_POST
+  DELETE_THREAD
+  PIN_THREAD
+  LOCK_THREAD
+  REVOKE_LICENSE
+  RESET_HWID
+  KILL_SESSION
+}
+
+model AdminAction {
+  id          String          @id @default(uuid())
+  adminId     String
+  targetId    String?
+  action      AdminActionType
+  reason      String?
+  createdAt   DateTime        @default(now())
+  
+  @@index([adminId])
+  @@index([createdAt])
+  @@map("admin_actions")
+}
+
+model BanRecord {
+  id          String    @id @default(uuid())
+  userId      String
+  bannedBy    String
+  reason      String
+  bannedAt    DateTime  @default(now())
+  expiresAt   DateTime?
+  unbannedAt  DateTime?
+  unbannedBy  String?
+  
+  user        User      @relation(fields: [userId], references: [id])
+  
+  @@index([userId])
+  @@map("ban_records")
+}
